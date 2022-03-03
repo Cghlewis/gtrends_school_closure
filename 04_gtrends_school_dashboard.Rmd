@@ -1,0 +1,366 @@
+---
+title: "7 Day Google Trends for School Closure Related Search Terms"
+output: 
+  flexdashboard::flex_dashboard:
+    navbar:
+      - { title: "Streamline Data Science", href: "https://streamlinedatascience.io/" }
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(bigrquery)
+library(shiny)
+library(plotly)
+library(tidyverse)
+library(DT)
+library(streamliner)
+library(lubridate)
+
+```
+
+<style type="text/css">
+
+.chart-title { /* chart_title */
+  font-size: 16px;
+  font-color: #222222;
+  
+</style>
+
+<style>                     
+.navbar {
+  background-color:#4d6d98;
+  border-color:white;
+}
+.navbar-brand {
+color:white!important;
+}
+</style>         
+
+
+```{r pull tables into R}
+
+## If the data updates frequently, you can pull a new table from BQ every time the app runs
+
+token = metagce::gce_token()
+bigrquery::bq_auth(token = token, cache = FALSE)
+
+# get project name
+
+project <- metagce::gce_project()
+
+# set dataset name
+
+dataset <- "raw_gtrends_school"
+
+# set table name
+
+table_all <- "raw_gtrends_allterms"
+
+table_close <- "raw_gtrends_close"
+
+table_snow <- "raw_gtrends_snow"
+
+table_virtual <- "raw_gtrends_virtual"
+
+# create bq table (from bigrquery)
+
+bqtable_all <- bq_table(project, dataset, table_all)
+
+bqtable_close <- bq_table(project, dataset, table_close)
+
+bqtable_snow <- bq_table(project, dataset, table_snow)
+
+bqtable_virtual <- bq_table(project, dataset, table_virtual)
+
+
+# pull table into R (from streamliner)
+
+tab_all <- table_pull(bqtable_all, from_time = NULL, to_time = NULL)
+
+tab_close <- table_pull(bqtable_close, from_time = NULL, to_time = NULL)
+
+tab_snow <- table_pull(bqtable_snow, from_time = NULL, to_time = NULL)
+
+tab_virtual <- table_pull(bqtable_virtual, from_time = NULL, to_time = NULL)
+
+
+```
+
+```{r modify and create new dfs}
+
+# Modify datetime_pulled and hits
+
+modify_df <- function(df){
+  
+  tab_all %>%
+  mutate(datetime_pulled = lubridate::as_datetime(datetime_pulled, tz = "America/Chicago"),
+         just_date = lubridate::as_date(datetime_pulled),
+         date_cst = lubridate::as_datetime(date, tz = "America/Chicago"),
+         index = as.numeric(recode(hits, "<1" = ".5")))
+}
+
+# Modify dfs
+
+df_all <- modify_df(tab_all)
+
+df_close <- modify_df(tab_close)
+
+df_snow <- modify_df(tab_snow)
+
+df_virtual <- modify_df(tab_virtual)
+
+# Create just US dfs
+
+us_df_all <- df_all %>%
+  filter(geo == "US")
+
+us_df_close <- df_close %>%
+  filter(geo == "US")
+
+us_df_snow <- df_snow %>%
+  filter(geo == "US")
+
+us_df_virtual <- df_virtual %>%
+  filter(geo == "US")
+  
+
+```
+
+
+Input {.sidebar}
+-----------------------------------------------------------------------
+      
+### Date
+      
+```{r add date filter}
+
+# Get max date
+
+max_date <- df_all %>%
+  mutate(max = max(just_date))
+
+# Date filter
+
+dateInput("enddate", "Select a data pull date:",
+                 value = unique(max_date$max),
+                 min = "2022-01-18",
+                 max = unique(max_date$max))
+
+# Text about date
+
+renderText({ 
+    paste("\nShowing the 7 day trend for", input$enddate-6, "to", input$enddate)
+  })
+
+
+
+```
+
+### State
+      
+```{r add state filter}
+
+# State filter
+
+# Remove US from states
+
+states_only <- df_all %>%
+  filter(geo != "US") %>%
+  arrange(geo)
+
+# Create input to select a state
+
+selectInput(inputId="state", label="\nSelect a state:", 
+                   choices = unique(states_only$geo))
+
+
+```
+
+
+### Notes:
+
+- Data are available beginning 2022-1-18, the first date data was pulled, and update daily at 23:30 CST.
+- Google Trends are normalized (scaled 0 to 100) based on time and location of a query to compare relative popularity.
+- This dashboard displays data in 7 day trends. Those trends are snapshots in time based on the day the data was pulled. An index for a specific date may change depending on what 7 day time span is selected (due to the normalization process).
+- More information on Google trend normalization can be found [here](https://support.google.com/trends/answer/4365533?hl=en) and [here](https://medium.com/google-news-lab/what-is-google-trends-data-and-what-does-it-mean-b48f07342ee8).
+
+Column {data-width=450}
+-----------------------------------------------------------------------
+
+### Hourly Interest in <b>"School Closing"</b> for `r renderText(input$state)` Compared to the U.S.
+
+```{r hourly plot close}
+
+# Data
+
+df_close_react <- reactive({
+  df_close %>%
+    filter(geo == input$state) %>%
+    bind_rows(us_df_close) %>% 
+    filter(just_date == input$enddate)
+})
+
+# Plot
+
+# Make hover clicks better in future
+# Remove seconds in future and add tx
+
+renderPlotly({
+plot <- df_close_react() %>%
+    rename(Date = date_cst, Index = index) %>%
+    ggplot(aes(x = Date, y = Index, color = geo)) +
+    geom_line() +
+    labs(x = "\n Date and CST Time", y = "Index \n", color = "State \n") +
+    theme_classic()+
+    scale_color_manual(values = c("gray", "#4d6d9a"))
+
+ggplotly(plot, tooltip = c("Date", "Index"))  
+  
+})
+
+```
+
+### Hourly Interest in <b>"Snow Day"</b> for `r renderText(input$state)` Compared to the U.S.
+
+```{r hourly plot snow}
+
+# Data
+
+df_snow_react <- reactive({
+  df_snow %>%
+    filter(geo == input$state) %>%
+    bind_rows(us_df_close) %>% 
+    filter(just_date == input$enddate)
+})
+
+# Plot
+
+# Make hover clicks better in future
+# Remove seconds in future and add tx
+
+renderPlotly({
+plot <- df_close_react() %>%
+    rename(Date = date_cst, Index = index) %>%
+    ggplot(aes(x = Date, y = Index, color = geo)) +
+    geom_line() +
+    labs(x = "\n Date and CST Time", y = "Index \n", color = "State \n") +
+    theme_classic() +
+    scale_color_manual(values = c("gray", "#99ced3"))
+
+ggplotly(plot, tooltip = c("Date", "Index"))  
+  
+})
+
+```
+
+### Hourly Interest in <b>"Virtual School"</b> for `r renderText(input$state)` Compared to the U.S.
+
+```{r hourly plot virtual}
+
+# Data
+
+df_virtual_react <- reactive({
+  df_virtual %>%
+    filter(geo == input$state) %>%
+    bind_rows(us_df_close) %>% 
+    filter(just_date == input$enddate)
+})
+
+# Plot
+
+# Make hover clicks better in future
+# Remove seconds in future and add tx
+
+renderPlotly({
+plot <- df_close_react() %>%
+    rename(Date = date_cst, Index = index) %>%
+    ggplot(aes(x = Date, y = Index, color = geo)) +
+    geom_line() +
+    labs(x = "\n Date and CST Time", y = "Index \n", color = "State \n") +
+    theme_classic() +
+    scale_color_manual(values = c("gray", "#edb5bf"))
+
+ggplotly(plot, tooltip = c("Date", "Index"))  
+  
+})
+
+```
+
+Column {data-width=550}
+-----------------------------------------------------------------------
+
+### Hourly Relative Interest in Combined Keywords "School Closing", "Snow Day" and "Virtual School" for `r renderText(input$state)`
+
+```{r hourly plot all}
+
+# Data
+
+df_all_react <- reactive({
+  df_all %>%
+    filter(geo == input$state) %>%
+    filter(just_date == input$enddate)
+})
+
+# Plot
+
+# Make hover clicks better in future
+# Remove seconds in future and add tx
+
+renderPlotly({
+plot <- df_all_react() %>%
+    rename(Date = date_cst, Index = index, Keyword = keyword) %>%
+    ggplot(aes(x = Date, y = Index, color = Keyword)) +
+    geom_line() +
+    labs(x = "\n Date and CST Time", y = "Index \n", color = "Keyword \n") +
+    theme_classic() +
+    scale_color_manual(values = c("#4d6d9a", "#edb5bf", "#99ced3"))
+
+ggplotly(plot, tooltip = c("Date", "Index", "Keyword"))  
+  
+})
+
+
+```
+
+
+### Daily Relative Average Index for Combined Keywords "School Closing", "Snow Day" and "Virtual School" for `r renderText(input$state)`
+
+```{r daily plot}
+
+# Data
+
+
+df_all_react2 <- reactive({ 
+  df_all %>%
+    filter(just_date == input$enddate) %>%
+    filter(geo == input$state) %>%
+    mutate(Day = lubridate::as_date(date_cst)) %>%
+    group_by(Day, keyword) %>%
+    summarize(Average = round(mean(index)), digits =0) %>%
+  pivot_longer(cols = Average, names_to = "stat", values_to = "Index")
+})
+
+# Plot
+
+renderPlotly({
+plot2 <- df_all_react2() %>%
+    rename(Keyword = keyword) %>%
+    ggplot(aes(x = Day, y = Index, fill = Keyword)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(x = "\n Day of the Week", y = "Average Index \n", fill = "Keyword \n") +
+    theme_classic() +
+    ylim(0,100) + 
+    scale_x_date(date_breaks = 'day', 
+                 date_labels = '%b %d\n%a') +
+    scale_fill_manual(values = c("#4d6d9a", "#edb5bf", "#99ced3"))
+  
+
+ggplotly(plot2, tooltip = c("Index", "Keyword"))
+  
+})
+
+
+```
